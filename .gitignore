@@ -216,3 +216,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Project rules
+debug_image.png
+geo_report.txt
+main_log.txt
+precise_log.txt
+cords.txt
+err_screenshots
