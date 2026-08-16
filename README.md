@@ -1,12 +1,12 @@
 # YaGuessr points generator
 
-A two-stage pipeline for turning a map image with panorama overlay into a
+A pipeline for turning a map image with panorama markers into a curated
 list of precise, real-world panorama coordinates:
 
 ```
-map.png --[main.py]--> geo_report.txt --[precise_cords.py]--> cords.txt
- (image)   (color match    (approximate      (headless-browser   (precise
-            + clustering)    lat/lon)          lookup on Yandex)   lat/lon)
+map.png --[main.py]--> geo_report.txt --[precise_cords.py]--> cords.txt --[map_editor.html]--> cords.txt
+ (image)   (color match    (approximate      (headless-browser   (precise      (visual review,
+            + clustering)    lat/lon)          lookup on Yandex)   lat/lon)      manual cleanup)
 ```
 
 1. **`main.py`** scans a map image for pixels of a given overlay color,
@@ -15,19 +15,23 @@ map.png --[main.py]--> geo_report.txt --[precise_cords.py]--> cords.txt
    between the map's corners.
 2. **`precise_cords.py`** takes those approximate coordinates and, for each
    one, opens Yandex's panorama viewer in a headless browser at that
-   location. Yandex snaps to the nearest actual panorama and reports its
+   location — Yandex snaps to the nearest actual panorama and reports its
    exact recorded coordinates, which is what gets saved. This corrects for
    both the pixel-resolution rounding error from stage 1 and any drift
    between the map raster and Yandex's own panorama positions.
+3. **`map_editor.html`** is a standalone, no-install map UI for reviewing
+   the result by eye and manually fixing it up — deleting stray/incorrect
+   points one by one or by drawing an area (e.g. to clear out a body of
+   water or a restricted zone), adding missed ones, and re-saving.
 
 ## Quick start
 
 ```bash
-python -m pip install -r requirements.txt
-python -m playwright install chromium
+pip install -r requirements.txt
+playwright install chromium
 ```
 
-`playwright install chromium` is a separate step from `pip install` - it
+`playwright install chromium` is a separate step from `pip install` — it
 downloads the actual browser binary Playwright drives, which isn't bundled
 with the Python package.
 
@@ -37,6 +41,10 @@ python main.py map.png "108,118,255" 55.7558 37.6173 55.7500 37.6250
 
 # Stage 2: approximate coordinates -> precise coordinates
 python precise_cords.py geo_report.txt -o cords.txt
+
+# Stage 3 (optional): review/edit cords.txt visually, then re-save it
+python -m http.server 8000
+# open http://localhost:8000/map_editor.html — it auto-loads cords.txt
 ```
 
 The first command looks for pixels close to RGB `(108,118,255)` in
@@ -49,14 +57,19 @@ The second command opens each of those points in a headless browser,
 reads back Yandex's precise panorama coordinates, and writes the deduplicated
 result to `cords.txt`.
 
+The third step opens a map you can click around to delete bad points, add
+missed ones, or clear out whole areas, then saves a new `cords.txt`. It's
+plain HTML/JS with no build step or install — see [Stage 3](#stage-3--map_editorhtml)
+for why a local server is recommended over just double-clicking the file.
+
 > **Compatibility note:** `precise_cords.py` expects a plain two-column
 > `lat lon` input file. Don't feed it a `main.py` output generated with
-> `--include-size` (three columns) - its line parser expects exactly two
+> `--include-size` (three columns) — its line parser expects exactly two
 > values per line and will error out on a third column.
 
 ---
 
-## Main script `main.py`
+## Stage 1 — `main.py`
 
 Finds pixels of a given overlay color on a map image (e.g. panorama
 markers), clusters nearby matches into single points, and converts their
@@ -84,9 +97,9 @@ very large images (9999x9999 and beyond) quickly.
 | `--width` | image width | Map width in pixels used for the geo conversion, if it differs from the image's actual pixel width. |
 | `--height` | image height | Same as above, for height. |
 | `--debug-image` | on | Save a debug PNG showing matched vs. non-matched pixels. |
-| `--no-debug-image` | - | Skip the debug PNG. Recommended for very large images if you don't need it, since it doubles memory use and adds disk I/O. |
+| `--no-debug-image` | — | Skip the debug PNG. Recommended for very large images if you don't need it, since it doubles memory use and adds disk I/O. |
 | `--fill-color` | `0,0,0,255` | Fill color used for non-matched pixels in the debug PNG. Same format as `color`. |
-| `--include-size` | off | Add a third column to the output file with the number of pixels assigned to each detected marker. Useful for tuning `--threshold` / `--min-distance` - **not** compatible with `precise_cords.py` as input, see note above. |
+| `--include-size` | off | Add a third column to the output file with the number of pixels assigned to each detected marker. Useful for tuning `--threshold` / `--min-distance` — **not** compatible with `precise_cords.py` as input, see note above. |
 | `-v`, `--verbose` | off | Print `DEBUG`-level logs to the console as well as `INFO`. The log file (`main_log.txt`) always gets full `DEBUG` detail regardless of this flag. |
 
 ### Examples
@@ -100,7 +113,8 @@ python main.py map.png "#6C76FF" 55.7558 37.6173 55.7500 37.6250 -t 85 -d 8
 Large image, skip the debug PNG for speed, keep marker sizes for inspection:
 
 ```bash
-python main.py huge_map.png "108,118,255,255" 40.71 -74.02 40.68 -73.97 --no-debug-image --include-size -o points.txt
+python main.py huge_map.png "108,118,255,255" 40.71 -74.02 40.68 -73.97 \
+    --no-debug-image --include-size -o points.txt
 ```
 
 ### How it works
@@ -115,16 +129,16 @@ For every pixel, the Euclidean distance between its RGB value and the target
 color is computed, converted to a 0-100% similarity score, and compared
 against `--threshold`. The result is a boolean mask of matched pixels.
 
-The alpha channel is ignored for matching - only RGB is compared. Internally
+The alpha channel is ignored for matching — only RGB is compared. Internally
 this is done in `float32` and the threshold is checked on **squared**
 distance, avoiding a `sqrt()` over every pixel and cutting memory traffic
-roughly in half compared to a naive `float64` implementation - this matters
+roughly in half compared to a naive `float64` implementation — this matters
 once you're at 9999x9999+ (100M+ pixels).
 
 #### 2. Clustering into points (`cluster_to_points`)
 
 A single marker (e.g. a panorama dot) is drawn as a small blob of several
-adjacent matched pixels, not a single pixel - so the raw mask needs to be
+adjacent matched pixels, not a single pixel — so the raw mask needs to be
 reduced to one point per blob. In busy areas markers can also sit close
 enough together, or their blobs can touch/overlap outright, that they can't
 just be treated as isolated dots.
@@ -133,34 +147,34 @@ A naive "dilate the mask, then label connected components, then take one
 centroid per component" approach breaks down in dense areas: if marker A's
 blob touches marker B's, and B's touches C's, connected-component labeling
 merges A-B-C into a *single* component no matter how far apart A and C
-actually are - a "chaining" effect. In a busy downtown full of closely-spaced
+actually are — a "chaining" effect. In a busy downtown full of closely-spaced
 panoramas this can collapse an entire district into one giant blob and a
 single output point, silently losing every marker in it. The current
 implementation avoids this:
 
 1. **Distance transform** (`scipy.ndimage.distance_transform_cdt`) gives
-  every matched pixel its approximate distance to the nearest non-matched
-  pixel - i.e. how deep inside a blob it sits. The chamfer/chessboard
-  variant is used instead of an exact Euclidean transform because it's
-  `int32` and considerably cheaper in time and memory; only the relative
-  location of peaks matters here, not the exact distance value.
+   every matched pixel its approximate distance to the nearest non-matched
+   pixel — i.e. how deep inside a blob it sits. The chamfer/chessboard
+   variant is used instead of an exact Euclidean transform because it's
+   `int32` and considerably cheaper in time and memory; only the relative
+   location of peaks matters here, not the exact distance value.
 2. **Local maxima** of that depth map (`scipy.ndimage.maximum_filter` over a
-  `min_distance`-sized window) approximate individual marker centers -
-  including inside merged/touching blobs, since a cluster of many small
-  markers produces many separate nearby peaks rather than one big flat
-  region.
+   `min_distance`-sized window) approximate individual marker centers —
+   including inside merged/touching blobs, since a cluster of many small
+   markers produces many separate nearby peaks rather than one big flat
+   region.
 3. `maximum_filter` doesn't strictly *guarantee* the resulting peaks end up
-  `min_distance` apart (ties/plateaus near the window edge can leave two
-  peaks slightly closer than that), so a final **greedy pass**
-  (`scipy.spatial.cKDTree.query_pairs`) explicitly enforces it: any
-  candidate closer than `min_distance` to an already-kept point is dropped.
-  This only runs over the peak candidates - typically thousands, even on a
-  huge image - not the raw matched pixels, which can be in the millions, so
-  it stays fast.
+   `min_distance` apart (ties/plateaus near the window edge can leave two
+   peaks slightly closer than that), so a final **greedy pass**
+   (`scipy.spatial.cKDTree.query_pairs`) explicitly enforces it: any
+   candidate closer than `min_distance` to an already-kept point is dropped.
+   This only runs over the peak candidates — typically thousands, even on a
+   huge image — not the raw matched pixels, which can be in the millions, so
+   it stays fast.
 
 The result is one `(x, y)` point per marker. Each point's `size` (pixel
 count, used with `--include-size`) is computed by assigning every original
-matched pixel to its nearest surviving point and counting - so sizes across
+matched pixel to its nearest surviving point and counting — so sizes across
 all points still add up to the total number of matched pixels, but are
 distributed correctly across individual markers rather than one blob.
 
@@ -170,7 +184,7 @@ longitude doesn't correspond to a fixed real-world distance the way a degree
 of latitude roughly does, pixel-space clustering is both simpler and more
 correct than clustering after converting to lat/lon.
 
-#### 3. Pixel to geographic conversion (`pixels_to_geo`)
+#### 3. Pixel → geographic conversion (`pixels_to_geo`)
 
 Latitude and longitude are obtained by linear interpolation between the
 map's north-west and south-east corners:
@@ -198,8 +212,8 @@ If `--debug-image` is enabled (default), a PNG named `debug_image.png` is
 saved next to the output: matched pixels keep their original color,
 everything else is replaced with `--fill-color`. This is purely for visually
 verifying that your color/threshold settings are picking up the right
-pixels - it has no effect on the geo conversion. Note this file can be
-**very large** (uncompressed, same resolution as the source map) - expect
+pixels — it has no effect on the geo conversion. Note this file can be
+**very large** (uncompressed, same resolution as the source map) — expect
 it to be comparable in size to the source image, or larger.
 
 ### Output format
@@ -218,7 +232,7 @@ With `--include-size`, a third column is appended:
 55.755198 37.618344 34
 ```
 
-`size` is the number of matched pixels assigned to that marker - a rough
+`size` is the number of matched pixels assigned to that marker — a rough
 proxy for marker confidence, handy for spotting outliers (e.g. a size of `1`
 is often a single stray pixel that happened to pass the similarity threshold
 rather than a real marker).
@@ -232,7 +246,7 @@ rather than a real marker).
   processes end-to-end in under 10 seconds on a typical machine; a
   9999x9999+ image should take roughly proportionally longer.
 - `--no-debug-image` avoids allocating a second full-size image buffer and
-  skips a PNG encode/write - worth using on very large images if you don't
+  skips a PNG encode/write — worth using on very large images if you don't
   need the visual check.
 - Memory usage is roughly `width * height * (4 + a few bytes)` for the
   source pixels plus mask/distance/label buffers; a 9999x9999+ image needs
@@ -241,7 +255,7 @@ rather than a real marker).
 
 ---
 
-## Precise script `precise_cords.py`
+## Stage 2 — `precise_cords.py`
 
 Takes the approximate coordinates from stage 1 and refines each one by
 actually opening it in Yandex's panorama viewer via a headless Chromium
@@ -249,7 +263,7 @@ browser (Playwright), then reading back the exact coordinates Yandex has
 recorded for the nearest real panorama at that location.
 
 This matters because a point from `main.py` is only as precise as the map
-image's resolution and the corner coordinates you gave it - it's a linear
+image's resolution and the corner coordinates you gave it — it's a linear
 estimate, not the panorama's actual recorded position. Opening the point in
 Yandex directly sidesteps that: whatever panorama Yandex resolves to at that
 location, its own reported coordinates are used as ground truth.
@@ -264,7 +278,7 @@ python precise_cords.py geo_report.txt -o cords.txt -pl 32
 
 | Argument | Default | Description |
 |----------|---------|--------------|
-| `input_file` | - | Path to a plain-text file of approximate points, one `lat lon` pair per line (i.e. `main.py`'s output *without* `--include-size`) |
+| `input_file` | — | Path to a plain-text file of approximate points, one `lat lon` pair per line (i.e. `main.py`'s output *without* `--include-size`) |
 | `-o`, `--output` | `cords.txt` | Output file for the precise, deduplicated coordinates (`lat lon` per line) |
 | `-pl`, `--parallel_limit` | `32` | Maximum number of browser pages processed concurrently |
 | `-v`, `--verbose` | off | Print `DEBUG`-level logs to the console (including per-point results), and save a screenshot to `err_screenshots/` for any point that fails all 3 attempts. The log file (`precise_log.txt`) always gets full `DEBUG` detail regardless of this flag. |
@@ -274,20 +288,20 @@ python precise_cords.py geo_report.txt -o cords.txt -pl 32
 For each input point:
 
 1. A Yandex map-widget URL is built (`generate_yandex_panorama_url`)
-  pointing the panorama viewer at that coordinate, with the panorama layer
-  forced open (`panorama[full]=true`).
+   pointing the panorama viewer at that coordinate, with the panorama layer
+   forced open (`panorama[full]=true`).
 2. A new isolated browser context/page opens that URL. Requests to
-  `pano.maps.yandex.net` (the actual panorama image tiles) are blocked -
-  the script only needs the coordinate metadata, not the rendered imagery,
-  so this saves bandwidth and load time.
+   `pano.maps.yandex.net` (the actual panorama image tiles) are blocked —
+   the script only needs the coordinate metadata, not the rendered imagery,
+   so this saves bandwidth and load time.
 3. Once the page settles, the script locates the panorama widget's share
-  link and parses the precise `lat, lon` out of its URL - this is the
-  coordinate Yandex has on record for the panorama it resolved to at that
-  location, not the input point itself.
+   link and parses the precise `lat, lon` out of its URL — this is the
+   coordinate Yandex has on record for the panorama it resolved to at that
+   location, not the input point itself.
 4. If a point fails (no panorama found nearby, network error, page timeout,
-  etc.), it's retried up to 3 times total with a randomized 1-2s delay
-  between attempts, before being logged as an error and excluded from the
-  output.
+   etc.), it's retried up to 3 times total with a randomized 1-2s delay
+   between attempts, before being logged as an error and excluded from the
+   output.
 
 Points are processed concurrently (bounded by `--parallel_limit` via an
 `asyncio.Semaphore`, one browser context per point), with a small randomized
@@ -295,9 +309,9 @@ Points are processed concurrently (bounded by `--parallel_limit` via an
 Progress is printed as `done/total` to the console (unless `--verbose`,
 which prints per-point debug logs instead).
 
-Once every point has been attempted, results are **deduplicated** - it's
+Once every point has been attempted, results are **deduplicated** — it's
 common for two nearby approximate points to resolve to the same actual
-panorama - and only unique coordinates are written to the output file. A
+panorama — and only unique coordinates are written to the output file. A
 summary is logged at the end:
 
 ```
@@ -310,19 +324,107 @@ Errors:   <points that failed after all retries>
 ### Requirements-specific notes
 
 - Runs one headless Chromium instance with up to `--parallel_limit`
-  concurrent pages/contexts - increasing this speeds things up but uses
+  concurrent pages/contexts — increasing this speeds things up but uses
   more memory/CPU and network bandwidth, and risks tripping Yandex's own
   rate limiting if pushed too high.
 - Needs network access to `yandex.ru`; nothing is cached between runs.
 - `err_screenshots/` is only created (and only populated) when running with
-  `--verbose` and a point fails all 3 attempts - useful for diagnosing why
+  `--verbose` and a point fails all 3 attempts — useful for diagnosing why
   a specific coordinate didn't resolve.
+
+---
+
+## Stage 3 — `map_editor.html`
+
+A self-contained, single-file map UI (Leaflet + vanilla JS, dark theme) for
+visually reviewing and hand-editing a points file — no install, no build
+step, no server-side code. Open it in any desktop browser.
+
+### Opening it
+
+```bash
+python -m http.server 8000
+```
+
+then visit `http://localhost:8000/map_editor.html` in the same folder as
+`cords.txt`. On load it tries to `fetch('cords.txt')` from its own
+directory and plots it automatically.
+
+You *can* just double-click the HTML file to open it directly as a
+`file://` URL, but the auto-load `fetch()` call is blocked by the browser's
+CORS policy for local files in Chrome/Edge (Firefox is more lenient) — it
+will silently fail over to an empty map with a "no points loaded" toast.
+Everything else (Open button, drag & drop, Save) works fine either way; the
+local server is only needed for the automatic `cords.txt` pickup on load.
+
+### Interface
+
+- **Point counter** (top-left panel) — total points on the map, with a
+  `+N`/`−N` delta badge once points have been added or removed relative to
+  what was first loaded.
+- **Add Point** (`A`) — click the map to drop new points.
+- **Delete Area** (`P`) — click to place polygon vertices; close the shape
+  by clicking the first vertex again, pressing `Enter`, or double-clicking.
+  Every point falling inside the polygon is deleted at once, with a
+  red flash on the area and a brief "ghost" animation on each removed
+  point. While drawing: `⌫`/`Backspace` removes the last vertex, `Esc`
+  cancels the whole polygon.
+- Clicking any individual point in the default (view) mode deletes just
+  that one point.
+- **Undo / redo** (`Ctrl+Z` / `Ctrl+Shift+Z` or `Ctrl+Y`) — every add,
+  delete, and area-delete is a step in an in-memory history stack (capped
+  at 120 steps), labeled and shown as `step X / Y`.
+- **Basemap switcher** (top-right) — Google hybrid (satellite + labels),
+  satellite only, or roadmap-style, swappable at any time.
+- **Hint bar** (bottom-left) — context-sensitive instructions for whatever
+  tool is currently active, plus a live lat/lon readout under the cursor.
+- **Open / Save** — `Open` loads any points file via a file picker (or drag
+  the file onto the page); `Save` (`Ctrl+S`) downloads the current point
+  set as `cords.txt` through the browser's normal download mechanism.
+
+### File format
+
+- **Reading** is tolerant: each line can separate `lat`/`lon` with spaces,
+  commas, or semicolons; blank lines and lines starting with `#` are
+  skipped; values are range-checked (`|lat| ≤ 90`, `|lon| ≤ 180`) and
+  anything that doesn't parse is silently dropped. This means it can open
+  either `geo_report.txt` or `cords.txt` directly, and third-party files in
+  a slightly different format too.
+- **Saving** always writes the strict `lat lon` (space-separated, one pair
+  per line, no comments) format that `precise_cords.py` expects — so a
+  round trip of editing `cords.txt` here and feeding it back into the rest
+  of the pipeline stays compatible.
+- Save triggers a browser **download**, not an in-place file write — it
+  does not overwrite the original `cords.txt` on disk by itself. The
+  downloaded file lands wherever your browser's default download location
+  is, and you'll need to move/rename it into the project folder yourself
+  (or repeatedly "Save" over an existing download of the same name,
+  depending on your browser's settings).
+- Closing the tab (or navigating away) with unsaved changes triggers the
+  browser's native "leave site?" confirmation.
+
+### Things to know
+
+- **Map tiles are fetched directly from `{s}.google.com/vt/...` with no API
+  key.** This is an unofficial access path — it tends to work fine for
+  light/personal use, but it isn't Google's supported way of embedding
+  their maps (that's `maps.googleapis.com` with a billed API key), and
+  Google can rate-limit or block it by IP/UA without notice. There's no
+  built-in fallback basemap; if the Google tiles stop working, swapping in
+  a keyless alternative (e.g. Esri World Imagery, or OpenStreetMap for the
+  roadmap view) in the `bases` object is a straightforward fix.
+- Requires internet access on first load for the Leaflet JS/CSS, Google
+  Fonts, and the basemap tiles themselves — all pulled from public CDNs,
+  nothing is bundled or vendored into the file.
+- All editing happens in the browser tab's memory; nothing is auto-saved.
+  If you close the tab without hitting Save, your edits are gone (aside
+  from the unsaved-changes warning above).
 
 ---
 
 ## Generated files reference
 
-Running both stages in the project directory produces:
+Running the full pipeline in the project directory produces:
 
 | File | Produced by | Contents |
 |------|-------------|----------|
@@ -332,11 +434,20 @@ Running both stages in the project directory produces:
 | `cords.txt` (or `-o` target) | `precise_cords.py` | Precise, deduplicated `lat lon` per panorama |
 | `precise_log.txt` | `precise_cords.py` | Full debug log of the run |
 | `err_screenshots/` | `precise_cords.py` (`--verbose` only) | Screenshots of points that failed all retry attempts |
+| `cords.txt` (browser download) | `map_editor.html` | Manually reviewed/edited copy of the points above — lands in your browser's download folder, not written in place |
 
 ## Requirements
+
+Stages 1 and 2 (Python):
 
 - Python 3.9+
 - `numpy`
 - `pillow`
 - `scipy`
 - `playwright` (plus `playwright install chromium` to fetch the browser binary)
+
+Stage 3 (`map_editor.html`): none — any modern desktop browser, plus
+internet access on load for Leaflet/fonts/tiles pulled from public CDNs. A
+local static file server (e.g. `python -m http.server`) is recommended so
+the auto-load of `cords.txt` works, but isn't strictly required if you're
+fine using the Open button or drag & drop instead.

@@ -1,0 +1,678 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="dark">
+<title>Point Editor · cords.txt</title>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<style>
+  :root{
+    --bg:#0d1117;
+    --panel:rgba(16,22,29,.96);
+    --panel-2:#1a2330;
+    --line:#263140;
+    --text:#e8edf3;
+    --muted:#8b9bb0;
+    --accent:#ffb02e;
+    --accent-ink:#241703;
+    --teal:#2fd4bd;
+    --red:#ff5d5d;
+    --green:#3ddc84;
+    --ui:'Rubik',system-ui,sans-serif;
+    --mono:'JetBrains Mono',ui-monospace,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;overflow:hidden;background:var(--bg);font-family:var(--ui);color:var(--text)}
+  #map{position:fixed;inset:0;background:#0b0e12;outline:none}
+  .leaflet-container{font-family:var(--ui)}
+  .leaflet-container.mode-add,
+  .leaflet-container.mode-poly{cursor:crosshair}
+
+  /* ---------- Editor Panel ---------- */
+  #panel{
+    position:fixed;top:14px;left:14px;width:292px;z-index:1100;
+    background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    box-shadow:0 18px 50px -12px rgba(0,0,0,.65);
+    max-height:calc(100vh - 28px);overflow-y:auto;overflow-x:hidden;
+    animation:slideIn .45s cubic-bezier(.2,.9,.3,1.1) both;
+  }
+  #panel::before{content:"";display:block;height:3px;border-radius:14px 14px 0 0;
+    background:linear-gradient(90deg,var(--accent),#ff7a3d 55%,var(--teal))}
+  @keyframes slideIn{from{opacity:0;transform:translateX(-26px)}to{opacity:1;transform:none}}
+
+  #panel header{
+    display:flex;align-items:center;gap:11px;padding:13px 14px 11px;
+    background-image:radial-gradient(circle at 1px 1px,rgba(255,255,255,.055) 1px,transparent 1.6px);
+    background-size:11px 11px;
+  }
+  .logo{width:36px;height:36px;flex:none;display:grid;place-items:center;border-radius:10px;
+    background:linear-gradient(160deg,#2a3646,#161e29);border:1px solid var(--line);color:var(--accent)}
+  #panel h1{font-size:15.5px;font-weight:700;letter-spacing:.2px}
+  #panel header .sub{font:500 10.5px var(--mono);color:var(--muted);margin-top:2px}
+  #collapseBtn{margin-left:auto;background:none;border:0;color:var(--muted);cursor:pointer;padding:4px;
+    border-radius:7px;transition:.18s;display:grid;place-items:center}
+  #collapseBtn:hover{color:var(--text);background:var(--panel-2)}
+  #collapseBtn svg{transition:transform .25s}
+  #panel.collapsed #collapseBtn svg{transform:rotate(-90deg)}
+  #panel.collapsed .panel-body{display:none}
+
+  .panel-body{padding:0 14px 14px}
+
+  .stat{
+    display:flex;align-items:center;gap:12px;padding:12px 14px;margin-bottom:12px;
+    background:var(--panel-2);border:1px solid var(--line);border-radius:11px;position:relative;overflow:hidden;
+  }
+  .stat::after{content:"";position:absolute;right:-18px;top:-18px;width:74px;height:74px;border-radius:50%;
+    background:radial-gradient(circle,rgba(255,176,46,.14),transparent 70%)}
+  #countNum{font:700 34px/1 var(--mono);color:var(--accent);min-width:64px}
+  #countNum.pop{animation:pop .28s ease}
+  @keyframes pop{40%{transform:scale(1.18)}}
+  .stat-label{font-size:11.5px;color:var(--muted);line-height:1.35}
+  .stat-delta{font:600 10.5px var(--mono);margin-top:3px;display:inline-block;padding:1px 6px;border-radius:20px}
+  .stat-delta.down{color:var(--red);background:rgba(255,93,93,.12)}
+  .stat-delta.up{color:var(--green);background:rgba(61,220,132,.12)}
+
+  .group-label{font:600 10px var(--mono);text-transform:uppercase;letter-spacing:.14em;color:var(--muted);margin:13px 2px 7px}
+
+  .btn{
+    display:flex;align-items:center;gap:9px;width:100%;padding:9px 12px;
+    background:var(--panel-2);border:1px solid var(--line);color:var(--text);
+    border-radius:9px;font:500 13.5px var(--ui);cursor:pointer;transition:.16s;text-align:left;
+  }
+  .btn:hover:not(:disabled){border-color:#3c4d63;background:#212d3c;transform:translateY(-1px)}
+  .btn:active:not(:disabled){transform:translateY(0)}
+  .btn:disabled{opacity:.38;cursor:default}
+  .btn svg{flex:none}
+  .btn kbd{margin-left:auto;font:600 9.5px var(--mono);background:#0b1016;border:1px solid var(--line);
+    border-bottom-width:2px;border-radius:5px;padding:2px 5px;color:var(--muted)}
+  .btn + .btn{margin-top:7px}
+
+  .tool.active{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:600;
+    box-shadow:0 0 0 3px rgba(255,176,46,.18),0 8px 20px -8px rgba(255,176,46,.55)}
+  .tool.active kbd{background:rgba(0,0,0,.18);border-color:rgba(0,0,0,.25);color:var(--accent-ink)}
+  .tool.danger.active{background:var(--red);border-color:var(--red);color:#2b0505;
+    box-shadow:0 0 0 3px rgba(255,93,93,.18),0 8px 20px -8px rgba(255,93,93,.55)}
+
+  .history-row{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+  .history-row .btn{padding:9px 10px;font-size:12.5px}
+  #histInfo{font:500 10px var(--mono);color:var(--muted);text-align:right;margin-top:5px}
+
+  .btn.save{background:linear-gradient(180deg,#35e28c,#17b565);border-color:#14a35a;color:#03230f;font-weight:700}
+  .btn.save:hover:not(:disabled){filter:brightness(1.07)}
+  .btn.ghost{background:linear-gradient(180deg,#e29d35,#e2ab35);border-color:#e2ab35;color:#03230f;font-weight:700}
+
+  #statusLine{margin-top:13px;font:500 10.5px var(--mono);color:var(--muted);
+    border-top:1px dashed var(--line);padding-top:9px;line-height:1.5}
+
+  /* ---------- Map Switcher ---------- */
+  #basemaps{position:fixed;top:14px;right:14px;z-index:1100;display:flex;gap:2px;padding:4px;
+    background:var(--panel);border:1px solid var(--line);border-radius:11px;
+    box-shadow:0 12px 30px -10px rgba(0,0,0,.6);animation:dropIn .45s .1s both}
+  @keyframes dropIn{from{opacity:0;transform:translateY(-14px)}to{opacity:1;transform:none}}
+  #basemaps button{background:transparent;border:0;color:var(--muted);font:600 11.5px var(--ui);
+    padding:7px 11px;border-radius:8px;cursor:pointer;transition:.15s;white-space:nowrap}
+  #basemaps button:hover{color:var(--text)}
+  #basemaps button.active{background:var(--panel-2);color:var(--accent);box-shadow:inset 0 0 0 1px var(--line)}
+
+  /* ---------- Bottom Hint Bar ---------- */
+  #hintbar{position:fixed;left:14px;bottom:14px;z-index:1100;display:flex;align-items:center;gap:14px;
+    background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px 13px;
+    box-shadow:0 12px 30px -10px rgba(0,0,0,.6);animation:riseIn .45s .18s both;max-width:calc(100vw - 28px)}
+  @keyframes riseIn{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+  #hintText{font-size:12px;color:var(--muted);line-height:1.4}
+  #hintText kbd,#drawbar kbd{font:600 9.5px var(--mono);background:#0b1016;border:1px solid var(--line);
+    border-bottom-width:2px;border-radius:4px;padding:1px 5px;color:var(--text)}
+  #coordsChip{font:500 11px var(--mono);color:var(--teal);white-space:nowrap;padding-left:14px;border-left:1px solid var(--line)}
+
+  /* ---------- Polygon Drawing Panel ---------- */
+  #drawbar{position:fixed;left:50%;bottom:18px;z-index:1150;transform:translate(-50%,180%);
+    display:flex;align-items:center;gap:10px;padding:9px 12px;
+    background:var(--panel);border:1px solid #6b4a12;border-radius:12px;
+    box-shadow:0 0 0 3px rgba(255,176,46,.12),0 18px 40px -10px rgba(0,0,0,.7);
+    transition:transform .3s cubic-bezier(.2,.9,.3,1.15)}
+  #drawbar.show{transform:translate(-50%,0)}
+  #drawbar .vcount{font:700 12px var(--mono);color:var(--accent);white-space:nowrap}
+  .dbtn{background:var(--panel-2);border:1px solid var(--line);color:var(--text);border-radius:8px;
+    padding:7px 11px;font:600 12px var(--ui);cursor:pointer;transition:.15s;display:flex;gap:6px;align-items:center}
+  .dbtn:hover:not(:disabled){background:#233042;transform:translateY(-1px)}
+  .dbtn:disabled{opacity:.4;cursor:default}
+  .dbtn.close{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+  .dbtn.close:hover:not(:disabled){filter:brightness(1.08)}
+
+  /* ---------- Toasts ---------- */
+  #toasts{position:fixed;right:14px;bottom:14px;z-index:1200;display:flex;flex-direction:column;gap:8px;align-items:flex-end}
+  .toast{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--teal);
+    border-radius:10px;padding:10px 14px;font-size:12.5px;box-shadow:0 14px 34px -10px rgba(0,0,0,.6);
+    animation:tIn .3s cubic-bezier(.2,.9,.3,1.2) both;max-width:320px}
+  .toast.ok{border-left-color:var(--green)}
+  .toast.warn{border-left-color:var(--accent)}
+  .toast.err{border-left-color:var(--red)}
+  .toast.info{border-left-color:#5aa9ff}
+  .toast.out{animation:tOut .3s forwards}
+  @keyframes tIn{from{opacity:0;transform:translateX(30px)}to{opacity:1;transform:none}}
+  @keyframes tOut{to{opacity:0;transform:translateX(30px)}}
+
+  /* ---------- Leaflet Dark Theme Overrides ---------- */
+  .leaflet-bar{border:1px solid var(--line)!important;box-shadow:0 10px 26px rgba(0,0,0,.5)!important;border-radius:9px!important;overflow:hidden}
+  .leaflet-bar a{background:#141b24!important;color:var(--text)!important;border-bottom:1px solid var(--line)!important}
+  .leaflet-bar a:last-child{border-bottom:0!important}
+  .leaflet-bar a:hover{background:var(--panel-2)!important;color:var(--accent)!important}
+  .leaflet-control-attribution{background:rgba(13,17,23,.78)!important;color:#6c7c8f!important;font:400 10px var(--ui)!important}
+  .leaflet-control-attribution a{color:var(--teal)!important}
+  .leaflet-tooltip.dark-tip{background:#10161d;border:1px solid var(--line);color:var(--text);
+    font:500 11px var(--mono);border-radius:7px;box-shadow:0 8px 22px rgba(0,0,0,.5);padding:6px 9px}
+  .leaflet-tooltip.dark-tip .tt-sub{font:500 9.5px var(--ui);color:var(--muted);margin-top:2px}
+  .leaflet-tooltip-top.dark-tip::before{border-top-color:#10161d}
+
+  /* deletion effects */
+  path.ghost-pt{transform-box:fill-box;transform-origin:center;animation:ghostPop 1s ease-out forwards;pointer-events:none}
+  @keyframes ghostPop{0%{opacity:1;transform:scale(1)}100%{opacity:0;transform:scale(2.8)}}
+  path.flash-poly{animation:flashFade .9s ease-out forwards;pointer-events:none}
+  @keyframes flashFade{from{opacity:1}to{opacity:0}}
+
+  @media (max-width:600px){
+    #panel{width:min(292px,calc(100vw - 28px))}
+    #basemaps{top:auto;bottom:64px;right:10px;flex-direction:column}
+    #coordsChip{display:none}
+  }
+</style>
+</head>
+<body>
+
+<div id="map" class="mode-view"></div>
+
+<!-- ======= EDITOR PANEL ======= -->
+<aside id="panel">
+  <header>
+    <div class="logo">
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 21s-7-5.2-7-11a7 7 0 0 1 14 0c0 5.8-7 11-7 11z"/><circle cx="12" cy="10" r="2.6"/>
+      </svg>
+    </div>
+    <div>
+      <h1>Point Editor</h1>
+    </div>
+    <button id="collapseBtn" title="Collapse panel">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+    </button>
+  </header>
+
+  <div class="panel-body">
+    <div class="stat">
+      <div id="countNum">0</div>
+      <div>
+        <div class="stat-label">points on map</div>
+        <span class="stat-delta" id="deltaBadge" hidden></span>
+      </div>
+    </div>
+
+    <div class="group-label">Tools</div>
+    <button id="toolAdd" class="btn tool">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+      Add Point <kbd>A</kbd>
+    </button>
+    <button id="toolPoly" class="btn tool danger">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round">
+        <path d="M12 3.5 20.5 9.7 17.2 19.5H6.8L3.5 9.7z" stroke-dasharray="3.4 2.6"/>
+        <circle cx="12" cy="3.5" r="1.7" fill="currentColor" stroke="none"/>
+      </svg>
+      Delete Area <kbd>P</kbd>
+    </button>
+
+    <div class="group-label">History</div>
+    <div class="history-row">
+      <button id="undoBtn" class="btn" disabled>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>
+        Undo
+      </button>
+      <button id="redoBtn" class="btn" disabled>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg>
+        Redo
+      </button>
+    </div>
+    <div id="histInfo">step 0 / 0</div>
+
+    <div class="group-label">File</div>
+    <button id="openBtn" class="btn ghost">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 19h12l1.8-7H7.8L6 19zm0 0V5a1 1 0 0 1 1-1h4l2 2h6a1 1 0 0 1 1 1v3"/></svg>
+      Open cords.txt…
+    </button>
+    <button id="saveBtn" class="btn save">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0 5-5m-5 5-5-5"/><path d="M4 21h16"/></svg>
+      Save cords.txt <kbd>Ctrl+S</kbd>
+    </button>
+
+    <footer id="statusLine">Initializing…</footer>
+  </div>
+</aside>
+
+<!-- ======= MAP TYPE ======= -->
+<div id="basemaps">
+  <button data-base="y" class="active">Satellite + Labels</button>
+  <button data-base="s">Satellite</button>
+  <button data-base="m">Map</button>
+</div>
+
+<!-- ======= HINT BAR ======= -->
+<div id="hintbar">
+  <div id="hintText"></div>
+  <div id="coordsChip">-</div>
+</div>
+
+<!-- ======= DRAWING PANEL ======= -->
+<div id="drawbar">
+  <span class="vcount">⬠ Vertices: <b id="vertCount">0</b></span>
+  <button class="dbtn" id="dbCancel">✕ Cancel <kbd>Esc</kbd></button>
+  <button class="dbtn" id="dbPop" disabled>⌫ Remove <kbd>⌫</kbd></button>
+  <button class="dbtn close" id="dbClose" disabled>✓ Close <kbd>Enter</kbd></button>
+</div>
+
+<div id="toasts"></div>
+<input type="file" id="fileInput" accept=".txt,text/plain" hidden>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+'use strict';
+const $ = s => document.querySelector(s);
+
+/* ================= MAP ================= */
+const map = L.map('map', { preferCanvas:true, zoomControl:false, minZoom:3, maxZoom:21, center:[55.751,37.618], zoom:11 });
+L.control.zoom({ position:'bottomright' }).addTo(map);
+
+const tileOpts = { subdomains:['mt0','mt1','mt2','mt3'], maxZoom:21, attribution:'Map: Google' };
+const bases = {
+  y: L.tileLayer('https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', tileOpts), // hybrid
+  s: L.tileLayer('https://{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}', tileOpts), // satellite
+  m: L.tileLayer('https://{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', tileOpts), // map
+};
+let currentBase = bases.y.addTo(map);
+
+document.querySelectorAll('#basemaps button').forEach(b=>{
+  b.addEventListener('click', ()=>{
+    document.querySelectorAll('#basemaps button').forEach(x=>x.classList.remove('active'));
+    b.classList.add('active');
+    map.removeLayer(currentBase);
+    currentBase = bases[b.dataset.base].addTo(map);
+  });
+});
+
+/* ================= LAYERS ================= */
+const pointsLayer = L.layerGroup().addTo(map);
+const drawLayer   = L.layerGroup().addTo(map);
+const fxRenderer  = L.svg({ padding:.5 });
+
+const PT_STYLE  = { radius:3,  weight:1.4, color:'#fff', fillColor:'#2fd4bd', fillOpacity:1 };
+const PT_HOVER  = { radius:6,weight:2,   color:'#fff', fillColor:'#ff5d5d', fillOpacity:1 };
+
+/* ================= STATE ================= */
+let points = [];            // [[lat,lng], ...]
+let history = [];           // [{label, points}]
+let hIndex = -1;
+let initialCount = null;
+let dirty = false;
+let mode = 'view';          // view | add | poly
+let drawing = false;
+let vertices = [];
+let cursorLatLng = null;
+let rubberLine = null;
+let firstMarker = null;
+let clickTimer = null;
+let justClosedAt = 0;
+
+/* ================= RENDER POINTS ================= */
+function renderPoints(){
+  pointsLayer.clearLayers();
+  const interactive = (mode === 'view');
+  for (const p of points){
+    const m = L.circleMarker(p, { ...PT_STYLE, interactive });
+    if (interactive){
+      m.bindTooltip(`${p[0].toFixed(6)} ${p[1].toFixed(6)}<div class="tt-sub">click to delete</div>`,
+        { direction:'top', offset:[0,-8], className:'dark-tip' });
+      m.on('mouseover', ()=> m.setStyle(PT_HOVER));
+      m.on('mouseout',  ()=> m.setStyle(PT_STYLE));
+      m.on('click', ()=> onPointClick(p));
+    }
+    pointsLayer.addLayer(m);
+  }
+}
+
+function onPointClick(p){
+  if (mode !== 'view') return;
+  const i = points.indexOf(p);
+  if (i < 0) return;
+  points.splice(i,1);
+  renderPoints();
+  pushHistory('Delete point');
+  updateCount();
+  ghostBurst([p]);
+  setStatus('Point deleted');
+}
+
+/* ================= HISTORY (undo / redo) ================= */
+function pushHistory(label){
+  history.splice(hIndex + 1);
+  history.push({ label, points: points.slice() });
+  if (history.length > 120) history.shift();
+  hIndex = history.length - 1;
+  dirty = true;
+  syncHistoryUI();
+}
+function applyState(){
+  points = history[hIndex].points.slice();
+  renderPoints();
+  updateCount();
+  syncHistoryUI();
+}
+function undo(){
+  if (hIndex <= 0) return;
+  const label = history[hIndex].label;
+  hIndex--; applyState();
+  toast(`⟲ Undone: ${label}`, 'info');
+  setStatus('Undone: ' + label);
+}
+function redo(){
+  if (hIndex >= history.length - 1) return;
+  hIndex++; applyState();
+  toast(`⟳ Redone: ${history[hIndex].label}`, 'info');
+  setStatus('Redone: ' + history[hIndex].label);
+}
+function syncHistoryUI(){
+  $('#undoBtn').disabled = hIndex <= 0;
+  $('#redoBtn').disabled = hIndex >= history.length - 1;
+  $('#histInfo').textContent = `step ${Math.max(hIndex,0)} / ${Math.max(history.length-1,0)}`;
+}
+
+/* ================= COUNTER ================= */
+function updateCount(){
+  const el = $('#countNum');
+  el.textContent = points.length.toLocaleString('en-US');
+  el.classList.remove('pop'); void el.offsetWidth; el.classList.add('pop');
+  const badge = $('#deltaBadge');
+  if (initialCount === null){ badge.hidden = true; return; }
+  const d = points.length - initialCount;
+  badge.hidden = (d === 0);
+  badge.textContent = d > 0 ? `+${d} from initial` : `−${Math.abs(d)} from initial`;
+  badge.className = 'stat-delta ' + (d > 0 ? 'up' : 'down');
+}
+
+/* ================= MODES ================= */
+const HINTS = {
+  view: 'Click a point to delete it. <kbd>A</kbd> - add mode, <kbd>P</kbd> - area delete',
+  add:  'Click on the map to add points. <kbd>Esc</kbd> - exit mode',
+  poly: 'Set area vertices by clicking. Close: click first vertex, <kbd>Enter</kbd>, or double-click',
+  drawing: '<kbd>Enter</kbd>/double-click to close · <kbd>⌫</kbd> remove vertex · <kbd>Esc</kbd> cancel'
+};
+function updateHint(){
+  $('#hintText').innerHTML = (drawing && vertices.length) ? HINTS.drawing : HINTS[mode];
+}
+function setMode(m){
+  if (m === mode && m !== 'view') m = 'view';   // toggle off if clicked again
+  if (mode === 'poly' && m !== 'poly') cancelDrawing();
+  mode = m;
+  $('#toolAdd').classList.toggle('active', m === 'add');
+  $('#toolPoly').classList.toggle('active', m === 'poly');
+  const c = map.getContainer();
+  c.classList.remove('mode-view','mode-add','mode-poly');
+  c.classList.add('mode-' + m);
+  if (m === 'view') map.doubleClickZoom.enable(); else map.doubleClickZoom.disable();
+  renderPoints();
+  updateHint();
+}
+
+/* ================= POLYGON DRAWING ================= */
+function startDrawing(){
+  drawing = true; vertices = [];
+  drawLayer.clearLayers();
+  $('#drawbar').classList.add('show');
+  updateDrawShapes();
+}
+function cancelDrawing(){
+  drawing = false; vertices = [];
+  cursorLatLng = null; rubberLine = null; firstMarker = null;
+  drawLayer.clearLayers();
+  $('#drawbar').classList.remove('show');
+  updateHint();
+}
+function nearFirst(latlng){
+  if (vertices.length < 3) return false;
+  return map.latLngToContainerPoint(vertices[0])
+         .distanceTo(map.latLngToContainerPoint(latlng)) <= 14;
+}
+function updateDrawShapes(){
+  drawLayer.clearLayers(); rubberLine = null; firstMarker = null;
+  if (vertices.length >= 3)
+    drawLayer.addLayer(L.polygon(vertices, { color:'#ffb02e', weight:1.4, dashArray:'4 6',
+      fillColor:'#ffb02e', fillOpacity:.10, interactive:false }));
+  if (vertices.length >= 2)
+    drawLayer.addLayer(L.polyline(vertices, { color:'#ffb02e', weight:2.5, interactive:false }));
+  vertices.forEach((v,i)=>{
+    const first = i === 0;
+    const mk = L.circleMarker(v, { radius:first?8:5, color:'#fff', weight:2,
+      fillColor:first?'#ffb02e':'#ff8a3d', fillOpacity:1, interactive:first });
+    if (first){
+      firstMarker = mk;
+      mk.on('click', ()=>{ if (vertices.length >= 3) closePolygon(); });
+    }
+    drawLayer.addLayer(mk);
+  });
+  $('#vertCount').textContent = vertices.length;
+  $('#dbPop').disabled  = vertices.length === 0;
+  $('#dbClose').disabled = vertices.length < 3;
+  updateRubber();
+  updateHint();
+}
+function updateRubber(){
+  if (rubberLine){ drawLayer.removeLayer(rubberLine); rubberLine = null; }
+  if (vertices.length && cursorLatLng){
+    rubberLine = L.polyline([vertices[vertices.length-1], cursorLatLng],
+      { color:'#ffb02e', weight:2, dashArray:'6 8', opacity:.85, interactive:false }).addTo(drawLayer);
+  }
+}
+function handlePolyClick(latlng){
+  if (performance.now() - justClosedAt < 350) return;
+  if (!drawing) startDrawing();
+  if (nearFirst(latlng)){ closePolygon(); return; }
+  vertices.push([latlng.lat, latlng.lng]);
+  updateDrawShapes();
+}
+function popVertex(){
+  if (!vertices.length) return;
+  vertices.pop();
+  updateDrawShapes();
+}
+function pointInPolygon(lat, lng, poly){
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++){
+    const la = poly[i][0], lo = poly[i][1];
+    const lb = poly[j][0], lo2 = poly[j][1];
+    if ((la > lat) !== (lb > lat) &&
+        lng < (lo2 - lo) * (lat - la) / (lb - la) + lo) inside = !inside;
+  }
+  return inside;
+}
+function closePolygon(){
+  if (!drawing) return;
+  if (vertices.length < 3){ toast('Need at least 3 vertices', 'warn'); return; }
+  const poly = vertices.slice();
+  const removed = [], survivors = [];
+  for (const p of points) (pointInPolygon(p[0], p[1], poly) ? removed : survivors).push(p);
+  justClosedAt = performance.now();
+
+  // polygon flash + "ghosts" of deleted points
+  L.polygon(poly, { renderer:fxRenderer, color:'#ff5d5d', weight:2,
+    fillColor:'#ff5d5d', fillOpacity:.28, interactive:false, className:'flash-poly' })
+    .addTo(map);
+  setTimeout(()=> map.eachLayer(l=>{ if (l.options && l.options.className==='flash-poly') l.remove(); }), 950);
+  ghostBurst(removed);
+
+  points = survivors;
+  renderPoints();
+  pushHistory(`Area delete (−${removed.length})`);
+  updateCount();
+  cancelDrawing();
+  if (removed.length){ toast(`Deleted points: ${removed.length}`, 'ok'); setStatus(`Area closed, deleted: ${removed.length}`); }
+  else { toast('No points found inside area', 'warn'); setStatus('Area empty'); }
+}
+
+/* deletion effects */
+function ghostBurst(list){
+  const cap = 300, step = Math.max(1, Math.floor(list.length / cap));
+  for (let i = 0; i < list.length; i += step){
+    const g = L.circleMarker(list[i], { renderer:fxRenderer, radius:6, color:'#ff5d5d', weight:2,
+      fillColor:'#ff5d5d', fillOpacity:.5, interactive:false, className:'ghost-pt' }).addTo(map);
+    setTimeout(()=> g.remove(), 1050);
+  }
+}
+
+/* ================= MAP CLICKS / MOUSE ================= */
+map.on('click', e=>{
+  if (mode === 'add'){
+    points.push([e.latlng.lat, e.latlng.lng]);
+    renderPoints();
+    pushHistory('Add point');
+    updateCount();
+    setStatus('Point added');
+  } else if (mode === 'poly'){
+    if (clickTimer) return;                  // second click of dblclick
+    const ll = e.latlng;
+    clickTimer = setTimeout(()=>{ clickTimer = null; handlePolyClick(ll); }, 230);
+  }
+});
+map.on('dblclick', ()=>{
+  if (mode !== 'poly') return;
+  if (clickTimer){ clearTimeout(clickTimer); clickTimer = null; }
+  if (drawing) closePolygon();
+});
+map.on('mousemove', e=>{
+  $('#coordsChip').textContent = `${e.latlng.lat.toFixed(6)}, ${e.latlng.lng.toFixed(6)}`;
+  if (mode === 'poly' && drawing){
+    cursorLatLng = e.latlng;
+    updateRubber();
+    if (firstMarker){
+      const near = nearFirst(e.latlng);
+      firstMarker.setStyle(near ? { radius:11, fillColor:'#3ddc84' } : { radius:8, fillColor:'#ffb02e' });
+    }
+  }
+});
+map.on('mouseout', ()=> $('#coordsChip').textContent = '-');
+
+/* ================= FILE ================= */
+function parseCords(text){
+  const out = [];
+  for (const line of text.split(/\r?\n/)){
+    const t = line.trim();
+    if (!t || t.startsWith('#')) continue;
+    const p = t.split(/[\s,;]+/).map(Number);
+    if (p.length >= 2 && isFinite(p[0]) && isFinite(p[1]) &&
+        Math.abs(p[0]) <= 90 && Math.abs(p[1]) <= 180) out.push([p[0], p[1]]);
+  }
+  return out;
+}
+function applyCordsText(text, name){
+  points = parseCords(text);
+  history = []; hIndex = -1;
+  pushHistory('Load ' + name);
+  dirty = false;
+  initialCount = points.length;
+  renderPoints(); updateCount(); syncHistoryUI();
+  if (points.length) map.fitBounds(L.latLngBounds(points).pad(.12), { maxZoom:17 });
+  setStatus(`Loaded points: ${points.length} (${name})`);
+  toast(`Loaded points: ${points.length}`, 'ok');
+}
+function save(){
+  if (!points.length && !confirm('Points: 0. Save empty file anyway?')) return;
+  const text = points.map(p => `${p[0]} ${p[1]}`).join('\n') + (points.length ? '\n' : '');
+  const blob = new Blob([text], { type:'text/plain;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'cords.txt';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=> URL.revokeObjectURL(a.href), 5000);
+  dirty = false;
+  setStatus(`Saved points: ${points.length}`);
+  toast(`💾 cords.txt downloaded (${points.length} points)`, 'ok');
+}
+async function loadInitial(){
+  try{
+    const res = await fetch('cords.txt', { cache:'no-store' });
+    if (!res.ok) throw new Error(res.status);
+    applyCordsText(await res.text(), 'cords.txt');
+  }catch(e){
+    points = []; history = []; hIndex = -1;
+    pushHistory('Empty document'); dirty = false; initialCount = 0;
+    renderPoints(); updateCount(); syncHistoryUI();
+    setStatus('Open cords.txt via "Open" button or drag & drop file');
+    toast('Open cords.txt via "Open" button or drag & drop file', 'warn');
+  }
+}
+
+$('#saveBtn').addEventListener('click', save);
+$('#openBtn').addEventListener('click', ()=> $('#fileInput').click());
+$('#fileInput').addEventListener('change', e=>{
+  const f = e.target.files[0];
+  if (f) f.text().then(t => applyCordsText(t, f.name));
+  e.target.value = '';
+});
+['dragover','dragenter'].forEach(ev => document.addEventListener(ev, e => e.preventDefault()));
+document.addEventListener('drop', e=>{
+  e.preventDefault();
+  const f = [...e.dataTransfer.files].find(f => /\.txt$/i.test(f.name));
+  if (f) f.text().then(t => applyCordsText(t, f.name));
+});
+
+/* ================= BUTTONS / KEYBOARD ================= */
+$('#toolAdd').addEventListener('click',  ()=> setMode('add'));
+$('#toolPoly').addEventListener('click', ()=> setMode('poly'));
+$('#undoBtn').addEventListener('click', undo);
+$('#redoBtn').addEventListener('click', redo);
+$('#dbCancel').addEventListener('click', cancelDrawing);
+$('#dbPop').addEventListener('click', popVertex);
+$('#dbClose').addEventListener('click', closePolygon);
+$('#collapseBtn').addEventListener('click', ()=> $('#panel').classList.toggle('collapsed'));
+
+window.addEventListener('keydown', e=>{
+  const mod = e.ctrlKey || e.metaKey;
+  if (mod && e.code === 'KeyZ'){ e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
+  if (mod && e.code === 'KeyY'){ e.preventDefault(); redo(); return; }
+  if (mod && e.code === 'KeyS'){ e.preventDefault(); save(); return; }
+  if (mod) return;
+  switch (e.code){
+    case 'Escape':
+      if (drawing) cancelDrawing(); else setMode('view');
+      break;
+    case 'Enter':
+      if (drawing){ e.preventDefault(); closePolygon(); }
+      break;
+    case 'Backspace':
+      if (drawing){ e.preventDefault(); popVertex(); }
+      break;
+    case 'KeyA': setMode(mode === 'add' ? 'view' : 'add'); break;
+    case 'KeyP': setMode(mode === 'poly' ? 'view' : 'poly'); break;
+  }
+});
+
+window.addEventListener('beforeunload', e=>{
+  if (dirty){ e.preventDefault(); e.returnValue = ''; }
+});
+
+/* ================= UI HELPERS ================= */
+function setStatus(t){ $('#statusLine').textContent = t; }
+function toast(msg, type='ok'){
+  const t = document.createElement('div');
+  t.className = 'toast ' + type;
+  t.textContent = msg;
+  $('#toasts').appendChild(t);
+  setTimeout(()=>{ t.classList.add('out'); setTimeout(()=> t.remove(), 320); }, 2700);
+}
+
+/* ================= START ================= */
+updateHint();
+loadInitial();
+</script>
+</body>
+</html>
